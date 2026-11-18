@@ -4,8 +4,8 @@
 //
 // 功能:
 //   - 音量调节 (0~21)
-//   - 亮屏时间 (常亮 / 15s / 30s / 1min / 3min / 5min)
 //   - 广播源管理: 切换电台、添加自定义电台、删除自定义电台
+//   - (自动熄屏已移除, 屏幕常亮)
 //
 // 自定义电台与设置存 NVS (namespace "admin"), 掉电不丢。
 // 依赖 ESP32 自带 WebServer, 无第三方库。
@@ -210,11 +210,7 @@ private:
         html += String(curVolume);
         html += F(" / 21</div></div>");
 
-        // 亮屏时间
-        html += F("<div class='card'><h3>亮屏时间</h3>"
-          "<select onchange=\"location='/timeout?s='+this.value\">");
-        html += timeoutOptions(screenTimeout);
-        html += F("</select><div class='small'>无操作后自动关背光, 按任意键唤醒</div></div>");
+        // (自动熄屏功能已移除, 屏幕常亮, 不再显示亮屏时间设置)
 
         // 电台列表
         html += F("<div class='card'><h3>广播源</h3>");

@@ -79,25 +79,18 @@ WiFiPortal portal("ATK-BOX-Setup");
 int screenRotation = ATK_DEFAULT_ROTATION;
 bool configMode = false;           // 方向设置模式
 
-int screenTimeout = 60;            // 亮屏秒数, 0=常亮 (从 NVS 载入)
-unsigned long lastActivity = 0;    // 最后一次操作时间
-bool screenAwake = true;           // 背光是否亮
+// 屏幕常亮: 背光在 atk_io.begin() 时已打开, 之后不再关闭。
+// (自动熄屏功能已移除: 之前的熄屏/唤醒状态机在部分板子上出现按键 toggle 黑屏的怪象)
+int screenTimeout = 0;             // 保留变量以兼容 WebAdmin 接口, 恒为 0 = 常亮
 
 WebAdmin admin(radios, curVolume, curIndex, screenTimeout, BUILTIN_COUNT);
 
 long t1s = 0, t10ms = 0;
 char buf[128] = {0};
 
-// 唤醒屏幕 (按键/网页操作调用)
-// 无条件点亮 + 重绘, 不依赖 screenAwake 软件状态
-// (之前用 wasAsleep 判断, 一旦软件状态与硬件背光不同步, 就会出现"按一下黑/再按一下亮")
+// 保留接口(网页回调/按键会调用), 但不再操作背光, 仅默认重绘
 void wakeScreen() {
-    lastActivity = millis();
-    atk_io.backlight(true);              // 每次都强制点亮, 幂等
-    screenAwake = true;
-    if (!configMode && ui.ready) {
-        ui.redraw();                     // 无条件重绘, 保证亮屏即有正确画面
-    }
+    // 屏幕常亮, 无需点亮背光; 不重绘以免打断动画
 }
 
 // ============================================================
@@ -172,11 +165,8 @@ void setVol(int offset) {
 }
 
 void setScreenTimeout(int sec) {
-    if (sec < 0) sec = 0;
-    screenTimeout = sec;
-    prefs.begin(ADMIN_NS, false);
-    prefs.putInt("timeout", screenTimeout);
-    prefs.end();
+    // 自动熄屏功能已移除, 屏幕恒常亮; 保留空函数兼容 WebAdmin 回调
+    (void)sec;
 }
 
 // ============================================================
@@ -316,13 +306,11 @@ void initHardware() {
     // ESP32-audioI2S: BCLK / LRC / DOUT
     audio.setPinout(ATK_I2S_BCLK, ATK_I2S_LRC, ATK_I2S_DOUT);
 
-    // 读取音量 / 亮屏时间 (namespace "admin")
+    // 读取音量 (namespace "admin"); 亮屏时间已移除, 屏幕恒常亮
     prefs.begin(ADMIN_NS, true);
-    curVolume     = prefs.getInt("volume", curVolume);
-    screenTimeout = prefs.getInt("timeout", screenTimeout);
+    curVolume = prefs.getInt("volume", curVolume);
     prefs.end();
     if (curVolume < 0 || curVolume > 21) curVolume = 15;
-    if (screenTimeout < 0) screenTimeout = 0;
     audio.setVolume(curVolume);
 
     // 载入自定义电台, 接在内置电台后面
@@ -341,7 +329,6 @@ void initHardware() {
     ui.setPlaying(false);
 
     setupBootButton();
-    lastActivity = millis();
 }
 
 void connectWiFi() {
@@ -411,26 +398,16 @@ void loop() {
     unsigned long now = millis();
     if (now - t10ms >= 10) { t10ms = now; pollXL9555Keys(); pollBootButton(); }
 
-    // 主界面: 推进动画 + 每秒更新时间/信号 (方向设置模式与熄屏时不重绘)
-    if (!configMode && screenAwake) {
-        bool wasAnimating = ui.ring.animating || ui.freq.animating || ui.volBar.animating;
+    // 主界面: 推进动画 + 每秒更新时间/信号 (方向设置模式时不重绘)
+    // 屏幕常亮, 不再有熄屏判断
+    if (!configMode) {
         ui.tick();
-        // 动画期间持续刷新活动时间, 避免动画一停就被判为超时黑屏
-        if (wasAnimating) lastActivity = now;
         if (now - t1s >= 1000) {
             t1s = now;
             ui.setRssi(WiFi.RSSI());
             ui.setPlaying(audio.isRunning());
             ui.redraw();                   // 刷新时间显示
         }
-    }
-
-    // 亮屏时间到 -> 关背光 (熄屏但继续播放)
-    if (screenAwake && screenTimeout > 0 && !configMode &&
-        (now - lastActivity > (unsigned long)screenTimeout * 1000)) {
-        atk_io.backlight(false);
-        screenAwake = false;
-        Serial.println("[LCD] backlight OFF (timeout)");
     }
 }
 

@@ -35,7 +35,7 @@ int curVolume = 15;                // 0~21
 const char *WEEK_DAYS[] = {"日", "一", "二", "三", "四", "五", "六"};
 
 // ---------- 电台 ----------
-#define FM_URL "http://lhttp.qtfm.cn/live/%d/64k.mp3"
+#define FM_URL "http://lhttp.qtfm.cn/live/%u/64k.mp3"
 typedef struct { u32_t id; String name; } RadioItem;
 
 static std::vector<RadioItem> radios = {
@@ -226,7 +226,7 @@ void setupOTA() {
         showSplash("软件升级", "请勿断电...");
     });
     ArduinoOTA.onProgress([](u32_t pro, u32_t total) {
-        sprintf(buf, "升级进度: %d / %d", pro, total);
+        sprintf(buf, "升级进度: %u / %u", pro, total);
         sp.createSprite(SCREEN_W, 20);
         sp.drawCentreString(buf, CX, 0);
         sp.pushSprite(0, 120);

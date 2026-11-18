@@ -19,9 +19,9 @@ public:
         // ---------- i8080 8位并口总线 ----------
         {
             auto cfg = _bus_instance.config();
-            // Bus_Parallel8 用 I2S 外设模拟并口。
-            // 音频库 ESP32-audioI2S 默认用 I2S0, 所以屏幕让到 I2S1, 避免冲突。
-            cfg.i2s_port = I2S_NUM_1;
+            // ESP32-S3 的 Bus_Parallel8 走 LCD_CAM 外设 (非 I2S),
+            // 与音频 I2S0 天然不冲突; S3 只有 port 0。
+            cfg.port = 0;
             cfg.pin_wr = 42;       // WR
             cfg.pin_rd = 41;       // RD
             cfg.pin_rs = 2;        // RS == DC

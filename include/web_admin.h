@@ -236,7 +236,7 @@ private:
           "<input type='text' name='n' placeholder='电台名称' required>"
           "<input type='text' name='u' placeholder='流地址 http://... 或 https://...' required>"
           "<button type='submit'>添加</button></form>"
-          "<div class='small'>支持 mp3 / m3u8 直链; 最多 ")
+          "<div class='small'>支持 mp3 / m3u8 直链; 最多 ");
         html += String(MAX_CUSTOM);
         html += F(" 个自定义电台</div></div>");
 

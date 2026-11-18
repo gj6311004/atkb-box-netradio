@@ -38,7 +38,7 @@ int curVolume = 15;                // 0~21
 const char *WEEK_DAYS[] = {"日", "一", "二", "三", "四", "五", "六"};
 
 // ---------- 电台 (name + url; RadioItem 定义在 web_admin.h) ----------
-#define FM_URL "http://lhttp.qtfm.cn/live/%u/64k.mp3"
+#define FM_URL "http://lhttp.qtfm.cn/live/%lu/64k.mp3"
 static String fmUrl(u32_t id) {
     char u[96];
     sprintf(u, FM_URL, id);

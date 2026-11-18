@@ -11,13 +11,13 @@
 #include "lgfx.h"
 #include "atk_hardware.h"
 #include "wifi_portal.h"      // 轻量 SoftAP 网页配网
+#include "web_admin.h"        // 后台管理网页
 
 #include <Arduino.h>
 #include <ArduinoOTA.h>
 #include <Audio.h>
 #include <WiFi.h>
 #include <Preferences.h>
-#include <vector>
 
 // ---------- 板级对象 ----------
 XL9555 atk_io;
@@ -37,18 +37,37 @@ Audio audio;
 int curVolume = 15;                // 0~21
 const char *WEEK_DAYS[] = {"日", "一", "二", "三", "四", "五", "六"};
 
-// ---------- 电台 ----------
+// ---------- 电台 (name + url; RadioItem 定义在 web_admin.h) ----------
 #define FM_URL "http://lhttp.qtfm.cn/live/%u/64k.mp3"
-typedef struct { u32_t id; String name; } RadioItem;
+static String fmUrl(u32_t id) {
+    char u[96];
+    sprintf(u, FM_URL, id);
+    return String(u);
+}
 
+// 内置电台 (前 BUILTIN_COUNT 个, 网页不可删除)
+static const int BUILTIN_COUNT = 20;
 static std::vector<RadioItem> radios = {
-    {4915, "清晨音乐台"}, {1223, "怀旧好声音"}, {4866, "浙江音乐调频"},
-    {1739, "厦门音乐广播"}, {1271, "深圳飞扬971"}, {20240, "山东经典音乐广播"},
-    {1296, "湖北经典音乐广播"}, {267, "上海经典947"}, {20003, "天津TIKI FM100.5"},
-    {1111, "四川城市之音"}, {4237, "长沙FM101.7城市之声"}, {332, "北京音乐广播"},
-    {274, "上海动感101"}, {839, "哈尔滨音乐广播"}, {1283, "江门旅游之声"},
-    {647, "重庆音乐广播"}, {4921, "郑州音乐广播"}, {4871, "唐山音乐广播"},
-    {20033, "1047 Nice FM"}, {4846, "893音乐广播"},
+    {"清晨音乐台",   fmUrl(4915)},
+    {"怀旧好声音",   fmUrl(1223)},
+    {"浙江音乐调频", fmUrl(4866)},
+    {"厦门音乐广播", fmUrl(1739)},
+    {"深圳飞扬971",  fmUrl(1271)},
+    {"山东经典音乐", fmUrl(20240)},
+    {"湖北经典音乐", fmUrl(1296)},
+    {"上海经典947",  fmUrl(267)},
+    {"天津TIKI FM",  fmUrl(20003)},
+    {"四川城市之音", fmUrl(1111)},
+    {"长沙城市之声", fmUrl(4237)},
+    {"北京音乐广播", fmUrl(332)},
+    {"上海动感101",  fmUrl(274)},
+    {"哈尔滨音乐台", fmUrl(839)},
+    {"江门旅游之声", fmUrl(1283)},
+    {"重庆音乐广播", fmUrl(647)},
+    {"郑州音乐广播", fmUrl(4921)},
+    {"唐山音乐广播", fmUrl(4871)},
+    {"Nice FM",      fmUrl(20033)},
+    {"893音乐广播",  fmUrl(4846)},
 };
 int curIndex = 0;
 
@@ -58,14 +77,29 @@ WiFiPortal portal("ATK-BOX-Setup");
 int screenRotation = ATK_DEFAULT_ROTATION;
 bool configMode = false;           // 方向设置模式
 
+int screenTimeout = 60;            // 亮屏秒数, 0=常亮 (从 NVS 载入)
+unsigned long lastActivity = 0;    // 最后一次操作时间
+bool screenAwake = true;           // 背光是否亮
+
+WebAdmin admin(radios, curVolume, curIndex, screenTimeout, BUILTIN_COUNT);
+
 long t1s = 0, t10ms = 0;
 char buf[128] = {0};
+
+// 唤醒屏幕 (按键/网页操作调用)
+void wakeScreen() {
+    lastActivity = millis();
+    if (!screenAwake) {
+        atk_io.backlight(true);
+        screenAwake = true;
+    }
+}
 
 // ============================================================
 // 显示辅助 (全部用动态宽高)
 // ============================================================
 void showStation() {
-    sprintf(buf, "%d.%s", curIndex + 1, radios[curIndex].name.c_str());
+    snprintf(buf, sizeof(buf), "%d.%s", curIndex + 1, radios[curIndex].name.c_str());
     int w = SW;
     sp.createSprite(w, 20);
     sp.setTextColor(TFT_CYAN, TFT_BLACK);
@@ -137,30 +171,52 @@ void showRotationScreen() {
 // 播放控制
 // ============================================================
 void playNext(int offset) {
+    if (radios.empty()) return;
     int total = radios.size();
     curIndex += offset;
     if (curIndex >= total) curIndex %= total;
     if (curIndex < 0) curIndex += total;
 
-    sprintf(buf, FM_URL, radios[curIndex].id);
-    audio.connecttohost(buf);
+    audio.connecttohost(radios[curIndex].url.c_str());
     showStation();
 }
 
+// 播放指定电台 (网页调用)
+void playIndex(int idx) {
+    if (idx < 0 || idx >= (int)radios.size()) return;
+    curIndex = idx;
+    audio.connecttohost(radios[curIndex].url.c_str());
+    showStation();
+}
+
+void setVolAbsolute(int v) {
+    if (v < 0) v = 0;
+    if (v > 21) v = 21;
+    curVolume = v;
+    audio.setVolume(curVolume);
+    prefs.begin(ADMIN_NS, false);
+    prefs.putInt("volume", curVolume);
+    prefs.end();
+    showVolume();
+}
+
 void setVol(int offset) {
-    int v = curVolume + offset;
-    if (v >= 0 && v <= 21) {
-        curVolume = v;
-        audio.setVolume(curVolume);
-        showVolume();
-    }
+    setVolAbsolute(curVolume + offset);
+}
+
+void setScreenTimeout(int sec) {
+    if (sec < 0) sec = 0;
+    screenTimeout = sec;
+    prefs.begin(ADMIN_NS, false);
+    prefs.putInt("timeout", screenTimeout);
+    prefs.end();
 }
 
 // ============================================================
 // 按键
 //   BOOT(K0): 短按 播放/暂停; 长按3秒 进入/保存方向设置
 //   方向模式内: 短按 切换方向; 长按3秒 保存并重启
-//   K1 下一台, K2 上一台 (XL9555, 低电平按下)
+//   K1 短按下一台 / 长按音量+; K2 短按上一台 / 长按音量- (低电平按下)
 // ============================================================
 void setupBootButton() {
     pinMode(0, INPUT_PULLUP);
@@ -174,20 +230,43 @@ void applyRotation() {
 void pollXL9555Keys() {
     if (configMode) return;                 // 方向模式下忽略 K1/K2
     static bool k1Last = true, k2Last = true;
-    static unsigned long k1Time = 0, k2Time = 0;
+    static unsigned long k1Press = 0, k2Press = 0;
+    static bool k1Long = false, k2Long = false;
+    static unsigned long k1Repeat = 0, k2Repeat = 0;
     bool k1 = atk_io.readInput(XL_P_KEY1);
     bool k2 = atk_io.readInput(XL_P_KEY2);
     unsigned long now = millis();
 
-    if (k1 != k1Last && (now - k1Time) > 200) {
-        k1Time = now;
-        if (!k1) playNext(1);
+    // ---- K1 ----
+    if (k1 != k1Last) {
+        if (!k1) {                           // 按下
+            k1Press = now; k1Long = false; k1Repeat = now;
+            wakeScreen();
+        } else {                             // 松开
+            if (!k1Long && (now - k1Press) < 1200) playNext(1);  // 短按: 下一台
+        }
         k1Last = k1;
     }
-    if (k2 != k2Last && (now - k2Time) > 200) {
-        k2Time = now;
-        if (!k2) playNext(-1);
+    // K1 长按: 音量+, 每 250ms 加一级
+    if (!k1 && k1Press && (now - k1Press) >= 1000) {
+        k1Long = true;
+        if (now - k1Repeat >= 250) { k1Repeat = now; setVol(1); }
+    }
+
+    // ---- K2 ----
+    if (k2 != k2Last) {
+        if (!k2) {
+            k2Press = now; k2Long = false; k2Repeat = now;
+            wakeScreen();
+        } else {
+            if (!k2Long && (now - k2Press) < 1200) playNext(-1); // 短按: 上一台
+        }
         k2Last = k2;
+    }
+    // K2 长按: 音量-
+    if (!k2 && k2Press && (now - k2Press) >= 1000) {
+        k2Long = true;
+        if (now - k2Repeat >= 250) { k2Repeat = now; setVol(-1); }
     }
 }
 
@@ -202,6 +281,7 @@ void pollBootButton() {
         if (!cur) {                          // 按下
             pressStart = now;
             longFired = false;
+            wakeScreen();
         } else {                             // 松开
             unsigned long held = now - pressStart;
             if (!longFired && held < 3000) {
@@ -263,9 +343,27 @@ void initHardware() {
     }
     // ESP32-audioI2S: BCLK / LRC / DOUT
     audio.setPinout(ATK_I2S_BCLK, ATK_I2S_LRC, ATK_I2S_DOUT);
+
+    // 读取音量 / 亮屏时间 (namespace "admin")
+    prefs.begin(ADMIN_NS, true);
+    curVolume     = prefs.getInt("volume", curVolume);
+    screenTimeout = prefs.getInt("timeout", screenTimeout);
+    prefs.end();
+    if (curVolume < 0 || curVolume > 21) curVolume = 15;
+    if (screenTimeout < 0) screenTimeout = 0;
     audio.setVolume(curVolume);
 
+    // 载入自定义电台, 接在内置电台后面
+    admin.loadCustomStations();
+
+    // 后台网页回调
+    admin.onPlay    = playIndex;
+    admin.onVolume  = setVolAbsolute;
+    admin.onTimeout = setScreenTimeout;
+    admin.onWake    = wakeScreen;
+
     setupBootButton();
+    lastActivity = millis();
 }
 
 void connectWiFi() {
@@ -314,12 +412,19 @@ void setup() {
     configTime(8 * 3600, 0, "ntp6.aliyun.com", "cn.ntp.org.cn", "ntp.ntsc.ac.cn");
 
     setupOTA();
+    admin.begin();                         // 启动后台管理网页
 
     tft.fillScreen(TFT_BLACK);
     tft.setTextColor(TFT_WHITE, TFT_BLACK);
     tft.drawCentreString("ATK BOX 网络收音机", CX, 8, FONT16);
     showIP();
     showVolume();
+    // 提示后台管理地址
+    sp.createSprite(SW, 20);
+    sp.setTextColor(TFT_MAGENTA, TFT_BLACK);
+    sp.drawCentreString("管理: " + WiFi.localIP().toString(), CX, 0);
+    sp.pushSprite(0, 44);
+    sp.deleteSprite();
 
     playNext(0);
     Serial.printf("WiFi=%s  ES8311=%d  IP=%s  rotation=%d\n",
@@ -331,10 +436,18 @@ void setup() {
 void loop() {
     audio.loop();
     ArduinoOTA.handle();
+    admin.handle();                        // 处理后台网页请求
 
     unsigned long now = millis();
     if (now - t10ms >= 10) { t10ms = now; pollXL9555Keys(); pollBootButton(); }
     if (now - t1s >= 1000 && !configMode) { t1s = now; showTime(); }
+
+    // 亮屏时间到 -> 关背光 (熄屏但继续播放)
+    if (screenAwake && screenTimeout > 0 && !configMode &&
+        (now - lastActivity > (unsigned long)screenTimeout * 1000)) {
+        atk_io.backlight(false);
+        screenAwake = false;
+    }
 }
 
 // ---------- audioI2S 回调 ----------

@@ -10,12 +10,12 @@
 // ============================================================
 #include "lgfx.h"
 #include "atk_hardware.h"
+#include "wifi_portal.h"      // 轻量 SoftAP 网页配网
 
 #include <Arduino.h>
 #include <ArduinoOTA.h>
 #include <Audio.h>
 #include <WiFi.h>
-#include <WiFiManager.h>       // SoftAP 网页配网
 #include <Preferences.h>
 #include <vector>
 
@@ -54,7 +54,7 @@ int curIndex = 0;
 
 // ---------- 设置 / 状态 ----------
 Preferences prefs;
-WiFiManager wm;
+WiFiPortal portal("ATK-BOX-Setup");
 int screenRotation = ATK_DEFAULT_ROTATION;
 bool configMode = false;           // 方向设置模式
 
@@ -269,19 +269,20 @@ void initHardware() {
 }
 
 void connectWiFi() {
-    // WiFiManager: 连不上已存 WiFi 时自动开热点 "ATK-BOX-Setup",
-    // 手机/电脑连上后浏览器填家里 WiFi 密码即可 (无需 APP)。
-    wm.setConnectTimeout(15);
-    wm.setConfigPortalTimeout(300);       // 配网页面最多停留 5 分钟
-
-    bool res = wm.autoConnect("ATK-BOX-Setup");   // 无密码热点
-    if (!res) {
-        // 配网超时/失败, 重启再试
-        showSplash("配网超时", "重启后重试");
-        delay(2000);
-        ESP.restart();
+    // 1) 尝试连接已存 WiFi
+    String ssid, pass;
+    if (portal.load(ssid, pass) && portal.tryConnect(ssid, pass)) {
+        return;                            // 连上了
     }
-    // 成功 (首次会自动把账号密码存进 NVS, 下次直接连)
+
+    // 2) 连不上 -> 开热点, 网页配网
+    showSplash("配网模式", "连接热点 ATK-BOX-Setup", "然后打开 192.168.4.1");
+    portal.startConfigPortal();            // 阻塞直到用户提交
+
+    // 3) 用户提交后重启, 用新账号连接
+    showSplash("已保存 WiFi", "正在重启...");
+    delay(800);
+    ESP.restart();
 }
 
 void setupOTA() {

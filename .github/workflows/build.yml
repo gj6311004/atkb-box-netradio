@@ -51,12 +51,21 @@ jobs:
             0x8000 .pio/build/atkb-box/partitions.bin \
             0x10000 .pio/build/atkb-box/firmware.bin
 
+      # 整理到 dist/: 既有整片合并固件, 也有可分文件烧录的 app/分区表/bootloader
+      # 分文件烧录可只刷 app0(0x10000) 而保留 NVS(0x9000) 里的 WiFi 配置
+      - name: 整理固件产物
+        run: |
+          mkdir -p dist
+          cp atkb-box-netradio-16MB.bin dist/
+          cp .pio/build/atkb-box/firmware.bin dist/app-atkb-box.bin
+          cp .pio/build/atkb-box/partitions.bin dist/partitions.bin
+          cp .pio/build/atkb-box/bootloader.bin dist/bootloader.bin
+          ls -lh dist/
+
       - name: 上传固件
         uses: actions/upload-artifact@v4
         with:
           name: atkb-box-netradio-firmware
-          path: |
-            atkb-box-netradio-16MB.bin
-            .pio/build/atkb-box/firmware.bin
+          path: dist/*
           if-no-files-found: error
           retention-days: 90

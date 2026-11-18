@@ -102,17 +102,37 @@ python -m esptool --chip esp32s3 -p COMx erase-flash
 python -m esptool --chip esp32s3 -p COMx write-flash 0x0 atkb-box-netradio-16MB.bin
 ```
 
-### 烧录方式 B：分文件（本机编译时）
+### 烧录方式 B：只刷 app，保留 WiFi（推荐日常升级）
 
+WiFi 账号密码、音量、亮度、方向、自定义电台都存在 **NVS 分区（`0x9000`，20KB）**。
+整片合并固件从 `0x0` 烧录会把 NVS 一起擦掉，所以每次都要重新配网。
+**只刷 app0 分区就能保留这些设置。**
+
+从 GitHub Actions 的 Artifact 下载 **分文件固件**（`dist/` 里有 4 个文件），其中：
+- `app-atkb-box.bin` → 应用固件，烧到 `0x10000`
+- `bootloader.bin` → `0x0`
+- `partitions.bin` → `0x8000`
+- `atkb-box-netradio-16MB.bin` → 整片合并（会清 NVS，首次用）
+
+**乐鑫 Flash Download Tool 图形界面（你用的方式）：**
+1. 选芯片 ESP32S3，填入各文件及地址：
+   - `bootloader.bin` → `0x0`
+   - `partitions.bin` → `0x8000`
+   - `app-atkb-box.bin` → `0x10000`
+2. **不要勾选整片合并固件** `atkb-box-netradio-16MB.bin`。
+3. **不要点 Erase/Clear Flash**（擦除会清掉 NVS）。直接 START。
+4. 首次烧录或改了分区表时，才需要用方式 A 整片刷。
+
+命令行等价写法（保留 NVS，不 erase）：
 ```bash
-python -m esptool --chip esp32s3 -p COMx erase-flash
 python -m esptool --chip esp32s3 -p COMx write-flash \
-  0x0 .pio/build/atkb-box/bootloader.bin \
-  0x8000 .pio/build/atkb-box/partition-table.bin \
-  0x10000 .pio/build/atkb-box/firmware.bin
+  0x0 bootloader.bin 0x8000 partitions.bin 0x10000 app-atkb-box.bin
 ```
 
-> COMx 换成设备管理器里实际的串口号。若烧录失败：按住 BOOT 键再按 RESET 进入下载模式。
+> COMx 换成实际串口号。若烧录失败：按住 BOOT 键再按 RESET 进入下载模式。
+>
+> 注意：如果某次升级**改变了分区表布局**，NVS 位置可能变，那次需要用方式 A 整片刷并重新配网。
+> 只要不动分区表，日常升级都能保留 WiFi。
 
 ## 5. 使用
 

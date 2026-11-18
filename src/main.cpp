@@ -89,16 +89,14 @@ long t1s = 0, t10ms = 0;
 char buf[128] = {0};
 
 // 唤醒屏幕 (按键/网页操作调用)
+// 无条件点亮 + 重绘, 不依赖 screenAwake 软件状态
+// (之前用 wasAsleep 判断, 一旦软件状态与硬件背光不同步, 就会出现"按一下黑/再按一下亮")
 void wakeScreen() {
     lastActivity = millis();
-    bool wasAsleep = !screenAwake;
-    if (wasAsleep) {
-        atk_io.backlight(true);
-        screenAwake = true;
-    }
-    // 关键修复: 唤醒后立刻重绘一次, 否则熄屏期间没画, 亮屏后是旧残影
-    if (wasAsleep && !configMode && ui.ready) {
-        ui.redraw();
+    atk_io.backlight(true);              // 每次都强制点亮, 幂等
+    screenAwake = true;
+    if (!configMode && ui.ready) {
+        ui.redraw();                     // 无条件重绘, 保证亮屏即有正确画面
     }
 }
 
@@ -280,6 +278,7 @@ void pollBootButton() {
                     showRotationScreen();
                     Serial.printf("[ BTN] short press -> rotation=%d\n", screenRotation);
                 } else {
+                    wakeScreen();                       // 刷新活动时间, 保证亮够设定时长
                     audio.pauseResume();
                     ui.setPlaying(audio.isRunning());
                 }

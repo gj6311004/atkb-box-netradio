@@ -44,11 +44,11 @@ jobs:
 
       - name: 合并为单文件固件
         run: |
-          python -m esptool --chip esp32s3 merge_bin \
+          python -m esptool --chip esp32s3 merge-bin \
             -o atkb-box-netradio-16MB.bin \
-            --flash_mode dio --flash_size 16MB --flash_freq 80m \
+            --flash-mode dio --flash-size 16MB --flash-freq 80m \
             0x0 .pio/build/atkb-box/bootloader.bin \
-            0x8000 .pio/build/atkb-box/partition-table.bin \
+            0x8000 .pio/build/atkb-box/partitions.bin \
             0x10000 .pio/build/atkb-box/firmware.bin
 
       - name: 上传固件

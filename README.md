@@ -1,1 +1,138 @@
-# atkb-box-netradio
+# 正点原子 ATK-DNESP32S3-BOX V1.1 网络收音机
+
+把 ATK ESP32S3 BOX（初代 V1.1，2.4 寸触摸屏）改成一台 WiFi 网络电台。
+基于开源项目 **`zhuhai-esp/ESP32-S3-AmourK08-4Keys` 的 `K08-4Keys-NetRadio`** 修改，
+只改硬件适配层，播放/配网/OTA 逻辑沿用原项目。
+
+---
+
+## 1. 这个工程适配哪块板
+
+**仅适配 ATK-DNESP32S3-BOX V1.1（初代）**，判据：
+
+| 项目 | 值 |
+|---|---|
+| 模组 | ATK-MWS3S (ESP32-S3R8, 16MB Flash + 8MB PSRAM) |
+| 屏幕 | 320×240 ST7789，**8 位 i8080 并口** |
+| 音频 | ES8311（I2C 0x18，无独立 MCLK，从 BCLK 恢复） |
+| IO 扩展 | XL9555（I2C 0x20）：功放/背光/K1/K2 |
+
+> BOX2 / BOX3 的引脚和音频芯片完全不同，**不能**用本固件。
+> BOX2 是 ES8389 + 不同 I2S 引脚，BOX3 是 SPI 屏 + ES8311/ES7210。
+
+### 引脚映射（来自小智官方 atk-dnesp32s3-box 板级定义）
+
+| 功能 | GPIO |
+|---|---|
+| I2C SDA / SCL | 48 / 45 |
+| I2S BCLK / WS(LRC) / DOUT | 21 / 13 / 14 |
+| 屏 CS / DC / RD / WR | 1 / 2 / 41 / 42 |
+| 屏 D0~D7 | 40,39,38,12,11,10,9,46 |
+| BOOT 键 (K0) | 0 |
+| K1 / K2 | XL9555 P0.4 / P0.3 |
+| 功放 / 背光 | XL9555 P0.5 / P0.7 |
+
+---
+
+## 2. 目录结构
+
+```
+atkb-box-netradio/
+├── .github/workflows/build.yml   # GitHub 云端自动编译（无需本机工具链）
+├── platformio.ini          # 编译配置（16MB Flash + OPI PSRAM）
+├── include/
+│   ├── lgfx.h              # i8080 并口 ST7789 驱动（本次适配）
+│   └── atk_hardware.h      # XL9555 + ES8311 驱动（本次适配）
+└── src/
+    └── main.cpp            # 网络收音机主程序（本次适配）
+```
+
+## 3. 编译（GitHub 云端，本机零安装）
+
+本机**不需要**安装 PlatformIO / ESP-IDF。已配好 GitHub Actions：
+
+1. 把本目录上传到你的 GitHub 仓库（在仓库网页点 `Add file → Upload files`，
+   选中整个 `atkb-box-netradio` 里的内容，即 `.github`、`include`、`src`、`platformio.ini`、
+   `README.md` 都放到仓库**根目录**）。
+2. 提交后进入仓库的 **Actions** 标签页，等待 `Build NetRadio Firmware` 跑完（首次约 5–10 分钟）。
+3. 点开该次运行，在页面底部 **Artifacts** 下载 `atkb-box-netradio-firmware`。
+4. 解压得到 **`atkb-box-netradio-16MB.bin`**（合并好的整片固件，一个文件搞定）和
+   `firmware.bin`（备用）。
+
+> 以后改了源码，只要 push，GitHub 会自动重新编译出新固件。
+> 也可以进 Actions 页面点 **Run workflow** 手动触发。
+
+<details>
+<summary>可选：想在本机编译（需装 PlatformIO，占约 10GB 磁盘）</summary>
+
+```bash
+cd atkb-box-netradio
+pio run -e atkb-box
+```
+
+成功后固件在 `.pio/build/atkb-box/firmware.bin`。首次会下载工具链。
+
+</details>
+
+## 4. 烧录
+
+BOX V1.1 有两个 USB-C 口：
+- **USB-SLAVE**：芯片原生 USB Serial/JTAG（推荐，设备号 303a:1001）
+- **UART**：CH343P 转串口
+
+只需本机装一个很小的 **esptool**（`pip install esptool`，几十 MB，远小于整套工具链）。
+
+### ⚠️ 先备份原厂固件（强烈建议）
+
+16MB 整片备份，以后可刷回：
+
+```bash
+python -m esptool --chip esp32s3 -p COMx read-flash 0 0x1000000 atk-box-factory.bin
+```
+
+### 烧录方式 A：整片固件（推荐，来自 GitHub 的合并 bin）
+
+```bash
+python -m esptool --chip esp32s3 -p COMx erase-flash
+python -m esptool --chip esp32s3 -p COMx write-flash 0x0 atkb-box-netradio-16MB.bin
+```
+
+### 烧录方式 B：分文件（本机编译时）
+
+```bash
+python -m esptool --chip esp32s3 -p COMx erase-flash
+python -m esptool --chip esp32s3 -p COMx write-flash \
+  0x0 .pio/build/atkb-box/bootloader.bin \
+  0x8000 .pio/build/atkb-box/partition-table.bin \
+  0x10000 .pio/build/atkb-box/firmware.bin
+```
+
+> COMx 换成设备管理器里实际的串口号。若烧录失败：按住 BOOT 键再按 RESET 进入下载模式。
+
+## 5. 使用
+
+1. 上电首次会进入 **SmartConfig 配网**，用 ESP-Touch / 乐鑫配网 APP 发送家里 WiFi 账号密码（手机连 2.4GHz）。
+2. 连上后屏幕显示电台名、时间、IP、音量，并自动播放第一个台。
+3. 按键：
+   - **K0 (BOOT)**：短按 播放/暂停，长按 音量减
+   - **K1**：下一台
+   - **K2**：上一台
+   - 电台播放结束自动切下一台
+4. OTA：连上同一网络后，浏览器访问 `http://<屏幕显示的IP>` 上方的 ArduinoOTA 端口可无线更新（Arduino IDE / platformio）。
+
+## 6. 已知限制 / 可能要微调的地方
+
+- **电台源**：沿用原项目的喜马拉雅开放接口 `lhttp.qtfm.cn`，若接口失效需替换 `FM_URL` 或改成自己的 m3u8/mp3 直链。
+- **屏幕方向**：`lgfx.h` 里 `invert`、`offset_rotation`、RGB 顺序按小智官方配置填写。若出现反色/镜像，调 `cfg.invert` 和 `tft.setRotation()`。
+- **触摸未启用**：本工程只用按键控制；BOX V1.1 的触摸屏（FT5x06 类）暂未接入。触摸屏驱动可参考正点原子例程再加。
+- **NS4168 版本**：小智代码会探测 P0.5 判断是 ES8311 还是 NS4168（纯功放）。本工程按 ES8311 编写；若你的盒子探测为 NS4168（无 ES8311），需要改用直驱 I2S 功放分支（见原项目 `initAudioDevice`）。绝大多数 V1.1 是 ES8311。
+- **音量范围**：audioI2S 的音量是 0~21，与 ES8311 硬件音量独立；ES8311 固定满刻度，由 audioI2S 数字音量控制。
+
+## 7. 来源与许可
+
+- 播放逻辑：`zhuhai-esp/ESP32-S3-AmourK08-4Keys` (K08-4Keys-NetRadio)
+- 板级引脚：`78/xiaozhi-esp32` main/boards/alientek/atk-dnesp32s3-box
+- ES8311 寄存器：`espressif/esp-bsp` components/es8311
+- 屏幕/音频库：LovyanGFX、ESP32-audioI2S（各按其许可证）
+
+尊重原作者开源协议，修改分发时请保留出处。

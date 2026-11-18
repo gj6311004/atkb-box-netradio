@@ -1,0 +1,8 @@
+.pio/
+.pioenvs/
+.piolibdeps/
+build.log
+*.bin
+*.elf
+.vscode/
+.DS_Store

@@ -1,0 +1,62 @@
+name: Build NetRadio Firmware
+
+# 在 GitHub 云端编译, 本地无需安装 PlatformIO / ESP-IDF
+# 触发: 手动、push 到任意分支、或修改源码的 PR
+on:
+  workflow_dispatch:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 安装 PlatformIO
+        run: pip install platformio
+
+      # 缓存平台/工具链/库, 让后续编译快很多
+      - name: 缓存 PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio/platforms
+            ~/.platformio/packages
+            ~/.platformio/libdeps
+            .pio
+          key: ${{ runner.os }}-pio-${{ hashFiles('platformio.ini') }}
+          restore-keys: ${{ runner.os }}-pio-
+
+      - name: 编译固件
+        run: pio run -e atkb-box
+
+      # 把 bootloader + 分区表 + 应用 合成一个 0x0 起始的整片固件,
+      # 烧录时只需一个文件, 地址 0x0
+      - name: 安装 esptool
+        run: pip install esptool
+
+      - name: 合并为单文件固件
+        run: |
+          python -m esptool --chip esp32s3 merge_bin \
+            -o atkb-box-netradio-16MB.bin \
+            --flash_mode dio --flash_size 16MB --flash_freq 80m \
+            0x0 .pio/build/atkb-box/bootloader.bin \
+            0x8000 .pio/build/atkb-box/partition-table.bin \
+            0x10000 .pio/build/atkb-box/firmware.bin
+
+      - name: 上传固件
+        uses: actions/upload-artifact@v4
+        with:
+          name: atkb-box-netradio-firmware
+          path: |
+            atkb-box-netradio-16MB.bin
+            .pio/build/atkb-box/firmware.bin
+          if-no-files-found: error
+          retention-days: 90

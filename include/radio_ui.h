@@ -86,7 +86,7 @@ public:
         cv.setColorDepth(16);
         cv.createSprite(W, H);
         cv.setFont(&fonts::efontCN_16);
-        cv.setTextDatum(top_center_datum);
+        cv.setTextDatum(textdatum_t::top_center);
         ready = true;
     }
 
@@ -231,7 +231,7 @@ private:
     void drawLeftBar() {
         // RSSI 竖条
         int x = 8, y0 = H / 2 - 40, h = 80;
-        cv.setTextDatum(top_center_datum);
+        cv.setTextDatum(textdatum_t::top_center);
         cv.setFont(&fonts::efontCN_16);
         cv.setTextColor(UI_TEXT_DIM, UI_BG);
         cv.drawString("信号", x + 10, y0 - 18);

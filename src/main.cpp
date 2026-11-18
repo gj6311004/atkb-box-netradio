@@ -91,9 +91,14 @@ char buf[128] = {0};
 // 唤醒屏幕 (按键/网页操作调用)
 void wakeScreen() {
     lastActivity = millis();
-    if (!screenAwake) {
+    bool wasAsleep = !screenAwake;
+    if (wasAsleep) {
         atk_io.backlight(true);
         screenAwake = true;
+    }
+    // 关键修复: 唤醒后立刻重绘一次, 否则熄屏期间没画, 亮屏后是旧残影
+    if (wasAsleep && !configMode && ui.ready) {
+        ui.redraw();
     }
 }
 
@@ -238,22 +243,42 @@ void pollBootButton() {
     static bool last = true;
     static unsigned long pressStart = 0;
     static bool longFired = false;
-    bool cur = digitalRead(0);
+    bool cur = digitalRead(0);              // 按下=LOW
     unsigned long now = millis();
 
+    // 按住期间持续检测长按 (不依赖松开沿)
+    if (!cur && pressStart && !longFired && (now - pressStart) >= 2000) {
+        longFired = true;
+        wakeScreen();
+        if (!configMode) {
+            configMode = true;
+            showRotationScreen();
+            Serial.printf("[ BTN] long press -> config mode ON, rotation=%d\n", screenRotation);
+        } else {
+            // 方向模式下长按: 保存并重启
+            prefs.begin("netradio", false);
+            prefs.putInt("rotation", screenRotation);
+            prefs.end();
+            showSplash("方向已保存", "正在重启...");
+            delay(800);
+            ESP.restart();
+        }
+    }
+
     if (cur != last) {
-        if (!cur) {                          // 按下
+        if (!cur) {                          // 按下沿
             pressStart = now;
             longFired = false;
             wakeScreen();
-        } else {                             // 松开
+        } else {                             // 松开沿
             unsigned long held = now - pressStart;
-            if (!longFired && held < 3000) {
+            if (!longFired && held < 2000) {
                 // 短按
                 if (configMode) {
                     screenRotation = (screenRotation + 1) % 8;
                     applyRotation();
                     showRotationScreen();
+                    Serial.printf("[ BTN] short press -> rotation=%d\n", screenRotation);
                 } else {
                     audio.pauseResume();
                     ui.setPlaying(audio.isRunning());
@@ -262,23 +287,6 @@ void pollBootButton() {
             pressStart = 0;
         }
         last = cur;
-    }
-
-    // 长按 3 秒触发一次
-    if (!cur && pressStart && !longFired && (now - pressStart) >= 3000) {
-        longFired = true;
-        if (!configMode) {
-            configMode = true;
-            showRotationScreen();
-        } else {
-            // 保存方向并重启
-            prefs.begin("netradio", false);
-            prefs.putInt("rotation", screenRotation);
-            prefs.end();
-            showSplash("方向已保存", "正在重启...");
-            delay(800);
-            ESP.restart();
-        }
     }
 }
 
@@ -406,7 +414,10 @@ void loop() {
 
     // 主界面: 推进动画 + 每秒更新时间/信号 (方向设置模式与熄屏时不重绘)
     if (!configMode && screenAwake) {
+        bool wasAnimating = ui.ring.animating || ui.freq.animating || ui.volBar.animating;
         ui.tick();
+        // 动画期间持续刷新活动时间, 避免动画一停就被判为超时黑屏
+        if (wasAnimating) lastActivity = now;
         if (now - t1s >= 1000) {
             t1s = now;
             ui.setRssi(WiFi.RSSI());
@@ -420,6 +431,7 @@ void loop() {
         (now - lastActivity > (unsigned long)screenTimeout * 1000)) {
         atk_io.backlight(false);
         screenAwake = false;
+        Serial.println("[LCD] backlight OFF (timeout)");
     }
 }
 

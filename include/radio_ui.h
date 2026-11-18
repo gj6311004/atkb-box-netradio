@@ -158,9 +158,13 @@ private:
         if (getLocalTime(&info)) {
             char t[16];
             strftime(t, sizeof(t), "%H:%M", &info);
-            cv.drawString(t, 6, 4);
+            // 时间左对齐, 从 x=10 开始, 避免靠边被裁 (默认 top_center 会把一半画到屏幕外)
+            cv.setTextDatum(textdatum_t::top_left);
+            cv.drawString(t, 10, 4);
+            // 日期右对齐
+            cv.setTextDatum(textdatum_t::top_right);
             sprintf(t, "%02d/%02d", info.tm_mon + 1, info.tm_mday);
-            cv.drawString(t, W - 52, 4);
+            cv.drawString(t, W - 8, 4);
         }
         // WiFi 信号弧
         int bars = rssi > -55 ? 4 : rssi > -65 ? 3 : rssi > -75 ? 2 : 1;
@@ -169,6 +173,8 @@ private:
             int bh = 3 + i * 3;
             cv.fillRect(bx, 18 - bh, 5, bh, i < bars ? UI_CYAN : UI_TEXT_DIM);
         }
+        // 恢复全局默认对齐
+        cv.setTextDatum(textdatum_t::top_center);
     }
 
     void drawRing() {

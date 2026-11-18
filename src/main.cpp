@@ -12,6 +12,7 @@
 #include "atk_hardware.h"
 #include "wifi_portal.h"      // 轻量 SoftAP 网页配网
 #include "web_admin.h"        // 后台管理网页
+#include "radio_ui.h"         // 动态仪表盘显示层
 
 #include <Arduino.h>
 #include <ArduinoOTA.h>
@@ -23,10 +24,11 @@
 XL9555 atk_io;
 ES8311 atk_codec;
 
-// ---------- 显示 (尺寸运行时从 tft 读取, 横竖屏通用) ----------
+// ---------- 显示 ----------
 #define FONT16 &fonts::efontCN_16
-LGFX tft;
-LGFX_Sprite sp(&tft);
+LGFX tft;                       // radio_ui.h 里 extern
+LGFX_Sprite sp(&tft);           // splash / 方向设置 等简单界面仍用
+RadioUI ui;                     // 主界面动态仪表盘
 #define CX (tft.width() / 2)
 #define CY (tft.height() / 2)
 #define SW tft.width()
@@ -96,54 +98,14 @@ void wakeScreen() {
 }
 
 // ============================================================
-// 显示辅助 (全部用动态宽高)
+// 显示辅助
+//   主界面由 RadioUI (ui) 负责; splash / 方向设置用 sp 简单绘制
 // ============================================================
-void showStation() {
-    snprintf(buf, sizeof(buf), "%d.%s", curIndex + 1, radios[curIndex].name.c_str());
-    int w = SW;
-    sp.createSprite(w, 20);
-    sp.setTextColor(TFT_CYAN, TFT_BLACK);
-    sp.drawCentreString(buf, w / 2, 0);
-    sp.pushSprite(0, 20);
-    sp.deleteSprite();
-}
-
-void showVolume() {
-    int w = 140;
-    sp.createSprite(w, 20);
-    sp.setTextColor(TFT_YELLOW, TFT_BLACK);
-    sprintf(buf, "音量: %d", curVolume);
-    sp.drawString(buf, 6, 0);
-    sp.pushSprite(4, SH - 24);
-    sp.deleteSprite();
-}
-
-void showIP() {
-    int w = 170;
-    sp.createSprite(w, 20);
-    sp.setTextColor(TFT_WHITE, TFT_BLACK);
-    sp.drawRightString(WiFi.localIP().toString().c_str(), w - 6, 0);
-    sp.pushSprite(SW - w - 4, SH - 24);
-    sp.deleteSprite();
-}
-
-void showTime() {
-    struct tm info;
-    if (!getLocalTime(&info)) return;
-    sprintf(buf, "%d年%d月%d日 星期%s", 1900 + info.tm_year, info.tm_mon + 1,
-            info.tm_mday, WEEK_DAYS[info.tm_wday]);
-    sp.createSprite(SW, 20);
-    sp.setTextColor(TFT_WHITE, TFT_BLACK);
-    sp.drawCentreString(buf, CX, 0);
-    sp.pushSprite(0, SH / 2 - 30);
-    sp.deleteSprite();
-
-    strftime(buf, 36, "%T", &info);
-    sp.createSprite(SW, 40);
-    sp.setTextColor(TFT_GREEN, TFT_BLACK);
-    sp.drawCentreString(buf, CX, 0, &fonts::FreeSans24pt7b);
-    sp.pushSprite(0, SH / 2);
-    sp.deleteSprite();
+// 把当前状态同步到仪表盘 (供状态变化时调用)
+void refreshUI() {
+    if (!ui.ready) return;
+    ui.setPlaying(audio.isRunning());
+    ui.setRssi(WiFi.RSSI());
 }
 
 void showSplash(const char *line1, const char *line2 = nullptr,
@@ -178,7 +140,8 @@ void playNext(int offset) {
     if (curIndex < 0) curIndex += total;
 
     audio.connecttohost(radios[curIndex].url.c_str());
-    showStation();
+    ui.setStation(curIndex, radios.size(), radios[curIndex].name);
+    ui.setPlaying(true);
 }
 
 // 播放指定电台 (网页调用)
@@ -186,7 +149,8 @@ void playIndex(int idx) {
     if (idx < 0 || idx >= (int)radios.size()) return;
     curIndex = idx;
     audio.connecttohost(radios[curIndex].url.c_str());
-    showStation();
+    ui.setStation(curIndex, radios.size(), radios[curIndex].name);
+    ui.setPlaying(true);
 }
 
 void setVolAbsolute(int v) {
@@ -197,7 +161,7 @@ void setVolAbsolute(int v) {
     prefs.begin(ADMIN_NS, false);
     prefs.putInt("volume", curVolume);
     prefs.end();
-    showVolume();
+    ui.setVolume(curVolume, 21);
 }
 
 void setVol(int offset) {
@@ -292,6 +256,7 @@ void pollBootButton() {
                     showRotationScreen();
                 } else {
                     audio.pauseResume();
+                    ui.setPlaying(audio.isRunning());
                 }
             }
             pressStart = 0;
@@ -362,6 +327,12 @@ void initHardware() {
     admin.onTimeout = setScreenTimeout;
     admin.onWake    = wakeScreen;
 
+    // 初始化仪表盘 UI (此时电台列表已完整)
+    ui.begin(SW, SH);
+    ui.setStation(0, radios.size(), radios.size() ? radios[0].name : "网络电台", true);
+    ui.setVolume(curVolume, 21, true);
+    ui.setPlaying(false);
+
     setupBootButton();
     lastActivity = millis();
 }
@@ -414,19 +385,11 @@ void setup() {
     setupOTA();
     admin.begin();                         // 启动后台管理网页
 
-    tft.fillScreen(TFT_BLACK);
-    tft.setTextColor(TFT_WHITE, TFT_BLACK);
-    tft.drawCentreString("ATK BOX 网络收音机", CX, 8, FONT16);
-    showIP();
-    showVolume();
-    // 提示后台管理地址
-    sp.createSprite(SW, 20);
-    sp.setTextColor(TFT_MAGENTA, TFT_BLACK);
-    sp.drawCentreString("管理: " + WiFi.localIP().toString(), CX, 0);
-    sp.pushSprite(0, 44);
-    sp.deleteSprite();
+    // 显示后台管理地址 2 秒, 然后进入仪表盘
+    showSplash("后台管理地址", WiFi.localIP().toString().c_str());
+    delay(2000);
 
-    playNext(0);
+    playNext(0);                           // 触发仪表盘首次绘制
     Serial.printf("WiFi=%s  ES8311=%d  IP=%s  rotation=%d\n",
                   WiFi.status() == WL_CONNECTED ? "OK" : "FAIL",
                   atk_io.hasES8311(), WiFi.localIP().toString().c_str(),
@@ -440,7 +403,17 @@ void loop() {
 
     unsigned long now = millis();
     if (now - t10ms >= 10) { t10ms = now; pollXL9555Keys(); pollBootButton(); }
-    if (now - t1s >= 1000 && !configMode) { t1s = now; showTime(); }
+
+    // 主界面: 推进动画 + 每秒更新时间/信号 (方向设置模式与熄屏时不重绘)
+    if (!configMode && screenAwake) {
+        ui.tick();
+        if (now - t1s >= 1000) {
+            t1s = now;
+            ui.setRssi(WiFi.RSSI());
+            ui.setPlaying(audio.isRunning());
+            ui.redraw();                   // 刷新时间显示
+        }
+    }
 
     // 亮屏时间到 -> 关背光 (熄屏但继续播放)
     if (screenAwake && screenTimeout > 0 && !configMode &&

@@ -1,5 +1,5 @@
 // ============================================================
-// 正点原子 ATK-DNESP32S3-BOX V1.1 网络收音机
+// 正点原子 ATK ESP32S3 BOX 网络收音机
 // 基于 zhuhai-esp/ESP32-S3-AmourK08-4Keys :: K08-4Keys-NetRadio 修改
 //
 // 硬件适配:
@@ -403,7 +403,7 @@ void setupOTA() {
 void setup() {
     Serial.begin(115200);
     delay(200);
-    Serial.println("ATK-DNESP32S3-BOX V1.1 NetRadio boot");
+    Serial.println("ATK ESP32S3 BOX NetRadio boot");
 
     initHardware();
     showSplash("ATK BOX 网络收音机", "正在启动...");

@@ -1,6 +1,6 @@
 #pragma once
 // ============================================================
-// 正点原子 ATK-DNESP32S3-BOX V1.1 屏幕驱动 (LovyanGFX)
+// 正点原子 ATK ESP32S3 BOX 屏幕驱动 (LovyanGFX)
 // ST7789 320x240, 8-bit i8080 并口
 // 引脚依据: 78/xiaozhi-esp32 atk-dnesp32s3-box/config.h
 //   CS=1  DC=2  RD=41  WR=42  RST=NC

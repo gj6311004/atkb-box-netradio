@@ -6,7 +6,7 @@
 //   屏幕 ST7789 320x240 i8080 并口  -> include/lgfx.h
 //   音频 ES8311 (I2C)              -> include/atk_hardware.h
 //   IO   XL9555 (功放/背光/按键)    -> include/atk_hardware.h
-//   电台 喜马拉雅开放流 (mp3)       -> 与原项目相同
+//   配网 WiFiManager (SoftAP 网页)  -> 无需 APP
 // ============================================================
 #include "lgfx.h"
 #include "atk_hardware.h"
@@ -15,19 +15,22 @@
 #include <ArduinoOTA.h>
 #include <Audio.h>
 #include <WiFi.h>
+#include <WiFiManager.h>       // SoftAP 网页配网
+#include <Preferences.h>
 #include <vector>
 
 // ---------- 板级对象 ----------
 XL9555 atk_io;
 ES8311 atk_codec;
 
-// ---------- 显示 ----------
+// ---------- 显示 (尺寸运行时从 tft 读取, 横竖屏通用) ----------
 #define FONT16 &fonts::efontCN_16
-#define SCREEN_W 320
-#define SCREEN_H 240
-#define CX (SCREEN_W / 2)          // 水平中心 = 160
 LGFX tft;
 LGFX_Sprite sp(&tft);
+#define CX (tft.width() / 2)
+#define CY (tft.height() / 2)
+#define SW tft.width()
+#define SH tft.height()
 
 // ---------- 音频 ----------
 Audio audio;
@@ -49,36 +52,44 @@ static std::vector<RadioItem> radios = {
 };
 int curIndex = 0;
 
-// ---------- 计时 ----------
+// ---------- 设置 / 状态 ----------
+Preferences prefs;
+WiFiManager wm;
+int screenRotation = ATK_DEFAULT_ROTATION;
+bool configMode = false;           // 方向设置模式
+
 long t1s = 0, t10ms = 0;
 char buf[128] = {0};
 
 // ============================================================
-// 显示辅助
+// 显示辅助 (全部用动态宽高)
 // ============================================================
 void showStation() {
     sprintf(buf, "%d.%s", curIndex + 1, radios[curIndex].name.c_str());
-    sp.createSprite(SCREEN_W, 20);
+    int w = SW;
+    sp.createSprite(w, 20);
     sp.setTextColor(TFT_CYAN, TFT_BLACK);
-    sp.drawCentreString(buf, CX, 0);
-    sp.pushSprite(0, 24);
+    sp.drawCentreString(buf, w / 2, 0);
+    sp.pushSprite(0, 20);
     sp.deleteSprite();
 }
 
 void showVolume() {
-    sprintf(buf, "音量: %d", curVolume);
-    sp.createSprite(140, 20);
+    int w = 140;
+    sp.createSprite(w, 20);
     sp.setTextColor(TFT_YELLOW, TFT_BLACK);
-    sp.drawString(buf, 8, 0);
-    sp.pushSprite(0, SCREEN_H - 24);
+    sprintf(buf, "音量: %d", curVolume);
+    sp.drawString(buf, 6, 0);
+    sp.pushSprite(4, SH - 24);
     sp.deleteSprite();
 }
 
 void showIP() {
-    sp.createSprite(180, 20);
+    int w = 170;
+    sp.createSprite(w, 20);
     sp.setTextColor(TFT_WHITE, TFT_BLACK);
-    sp.drawRightString(WiFi.localIP().toString().c_str(), 172, 0);
-    sp.pushSprite(SCREEN_W - 180, SCREEN_H - 24);
+    sp.drawRightString(WiFi.localIP().toString().c_str(), w - 6, 0);
+    sp.pushSprite(SW - w - 4, SH - 24);
     sp.deleteSprite();
 }
 
@@ -87,25 +98,39 @@ void showTime() {
     if (!getLocalTime(&info)) return;
     sprintf(buf, "%d年%d月%d日 星期%s", 1900 + info.tm_year, info.tm_mon + 1,
             info.tm_mday, WEEK_DAYS[info.tm_wday]);
-    sp.createSprite(SCREEN_W, 20);
+    sp.createSprite(SW, 20);
     sp.setTextColor(TFT_WHITE, TFT_BLACK);
     sp.drawCentreString(buf, CX, 0);
-    sp.pushSprite(0, 96);
+    sp.pushSprite(0, SH / 2 - 30);
     sp.deleteSprite();
 
     strftime(buf, 36, "%T", &info);
-    sp.createSprite(SCREEN_W, 40);
+    sp.createSprite(SW, 40);
     sp.setTextColor(TFT_GREEN, TFT_BLACK);
     sp.drawCentreString(buf, CX, 0, &fonts::FreeSans24pt7b);
-    sp.pushSprite(0, 120);
+    sp.pushSprite(0, SH / 2);
     sp.deleteSprite();
 }
 
-void showSplash(const char *line1, const char *line2 = nullptr) {
+void showSplash(const char *line1, const char *line2 = nullptr,
+                const char *line3 = nullptr) {
     tft.fillScreen(TFT_BLACK);
     tft.setTextColor(TFT_WHITE, TFT_BLACK);
-    tft.drawCentreString(line1, CX, 70, FONT16);
-    if (line2) tft.drawCentreString(line2, CX, 100, FONT16);
+    tft.drawCentreString(line1, CX, CY - 30, FONT16);
+    if (line2) tft.drawCentreString(line2, CX, CY, FONT16);
+    if (line3) tft.drawCentreString(line3, CX, CY + 30, FONT16);
+}
+
+// 方向设置模式界面: 大字显示当前旋转值
+void showRotationScreen() {
+    tft.fillScreen(TFT_BLACK);
+    tft.setTextColor(TFT_WHITE, TFT_BLACK);
+    tft.drawCentreString("屏幕方向设置", CX, 20, FONT16);
+    tft.setTextColor(TFT_YELLOW, TFT_BLACK);
+    sprintf(buf, "方向 %d / 7", screenRotation);
+    tft.drawCentreString(buf, CX, CY - 20, FONT16);
+    tft.setTextColor(TFT_WHITE, TFT_BLACK);
+    tft.drawCentreString("短按:切换  长按3秒:保存", CX, SH - 40, FONT16);
 }
 
 // ============================================================
@@ -132,26 +157,33 @@ void setVol(int offset) {
 }
 
 // ============================================================
-// 按键 (K0=BOOT/GPIO0 播放暂停/音量, K1/K2 在 XL9555 上, 低电平按下)
+// 按键
+//   BOOT(K0): 短按 播放/暂停; 长按3秒 进入/保存方向设置
+//   方向模式内: 短按 切换方向; 长按3秒 保存并重启
+//   K1 下一台, K2 上一台 (XL9555, 低电平按下)
 // ============================================================
 void setupBootButton() {
     pinMode(0, INPUT_PULLUP);
 }
 
+void applyRotation() {
+    tft.setRotation(screenRotation);
+    tft.fillScreen(TFT_BLACK);
+}
+
 void pollXL9555Keys() {
+    if (configMode) return;                 // 方向模式下忽略 K1/K2
     static bool k1Last = true, k2Last = true;
     static unsigned long k1Time = 0, k2Time = 0;
     bool k1 = atk_io.readInput(XL_P_KEY1);
     bool k2 = atk_io.readInput(XL_P_KEY2);
     unsigned long now = millis();
 
-    // K1: 下一台
     if (k1 != k1Last && (now - k1Time) > 200) {
         k1Time = now;
         if (!k1) playNext(1);
         k1Last = k1;
     }
-    // K2: 上一台
     if (k2 != k2Last && (now - k2Time) > 200) {
         k2Time = now;
         if (!k2) playNext(-1);
@@ -161,21 +193,47 @@ void pollXL9555Keys() {
 
 void pollBootButton() {
     static bool last = true;
-    static unsigned long pressTime = 0, lastPress = 0;
+    static unsigned long pressStart = 0;
+    static bool longFired = false;
     bool cur = digitalRead(0);
     unsigned long now = millis();
-    if (cur != last && (now - lastPress) > 200) {
-        if (!cur) pressTime = now;              // 按下
-        else {                                   // 松开
-            lastPress = now;
-            if (pressTime && (now - pressTime) > 1200) {
-                setVol(-1);                      // 长按: 音量减
-            } else {
-                audio.pauseResume();             // 短按: 播放/暂停
+
+    if (cur != last) {
+        if (!cur) {                          // 按下
+            pressStart = now;
+            longFired = false;
+        } else {                             // 松开
+            unsigned long held = now - pressStart;
+            if (!longFired && held < 3000) {
+                // 短按
+                if (configMode) {
+                    screenRotation = (screenRotation + 1) % 8;
+                    applyRotation();
+                    showRotationScreen();
+                } else {
+                    audio.pauseResume();
+                }
             }
-            pressTime = 0;
+            pressStart = 0;
         }
         last = cur;
+    }
+
+    // 长按 3 秒触发一次
+    if (!cur && pressStart && !longFired && (now - pressStart) >= 3000) {
+        longFired = true;
+        if (!configMode) {
+            configMode = true;
+            showRotationScreen();
+        } else {
+            // 保存方向并重启
+            prefs.begin("netradio", false);
+            prefs.putInt("rotation", screenRotation);
+            prefs.end();
+            showSplash("方向已保存", "正在重启...");
+            delay(800);
+            ESP.restart();
+        }
     }
 }
 
@@ -186,8 +244,14 @@ void initHardware() {
     Wire.begin(ATK_I2C_SDA, ATK_I2C_SCL);
     atk_io.begin();                       // 功放 + 背光打开, 探测音频芯片
 
+    // 读取保存的屏幕方向
+    prefs.begin("netradio", true);
+    screenRotation = prefs.getInt("rotation", ATK_DEFAULT_ROTATION);
+    prefs.end();
+    if (screenRotation < 0 || screenRotation > 7) screenRotation = ATK_DEFAULT_ROTATION;
+
     tft.init();
-    tft.setRotation(0);
+    tft.setRotation(screenRotation);
     tft.setColorDepth(8);
     tft.fillScreen(TFT_BLACK);
     tft.setFont(FONT16);
@@ -205,19 +269,19 @@ void initHardware() {
 }
 
 void connectWiFi() {
-    showSplash("正在连接 WiFi...", "首次使用请配网");
-    WiFi.mode(WIFI_MODE_STA);
-    WiFi.begin();
-    for (int i = 0; WiFi.status() != WL_CONNECTED && i < 100; i++) delay(100);
+    // WiFiManager: 连不上已存 WiFi 时自动开热点 "ATK-BOX-Setup",
+    // 手机/电脑连上后浏览器填家里 WiFi 密码即可 (无需 APP)。
+    wm.setConnectTimeout(15);
+    wm.setConfigPortalTimeout(300);       // 配网页面最多停留 5 分钟
 
-    if (WiFi.status() != WL_CONNECTED) {
-        showSplash("进入配网模式", "用 ESPTouch APP 配网");
-        WiFi.mode(WIFI_MODE_APSTA);
-        WiFi.beginSmartConfig();
-        while (WiFi.status() != WL_CONNECTED) delay(100);
-        WiFi.stopSmartConfig();
-        WiFi.mode(WIFI_MODE_STA);
+    bool res = wm.autoConnect("ATK-BOX-Setup");   // 无密码热点
+    if (!res) {
+        // 配网超时/失败, 重启再试
+        showSplash("配网超时", "重启后重试");
+        delay(2000);
+        ESP.restart();
     }
+    // 成功 (首次会自动把账号密码存进 NVS, 下次直接连)
 }
 
 void setupOTA() {
@@ -227,9 +291,9 @@ void setupOTA() {
     });
     ArduinoOTA.onProgress([](u32_t pro, u32_t total) {
         sprintf(buf, "升级进度: %u / %u", pro, total);
-        sp.createSprite(SCREEN_W, 20);
+        sp.createSprite(SW, 20);
         sp.drawCentreString(buf, CX, 0);
-        sp.pushSprite(0, 120);
+        sp.pushSprite(0, SH / 2);
         sp.deleteSprite();
     });
     ArduinoOTA.onEnd([] { showSplash("升级成功", "正在重启..."); });
@@ -257,9 +321,10 @@ void setup() {
     showVolume();
 
     playNext(0);
-    Serial.printf("WiFi=%s  ES8311=%d  IP=%s\n",
+    Serial.printf("WiFi=%s  ES8311=%d  IP=%s  rotation=%d\n",
                   WiFi.status() == WL_CONNECTED ? "OK" : "FAIL",
-                  atk_io.hasES8311(), WiFi.localIP().toString().c_str());
+                  atk_io.hasES8311(), WiFi.localIP().toString().c_str(),
+                  screenRotation);
 }
 
 void loop() {
@@ -268,7 +333,7 @@ void loop() {
 
     unsigned long now = millis();
     if (now - t10ms >= 10) { t10ms = now; pollXL9555Keys(); pollBootButton(); }
-    if (now - t1s >= 1000) { t1s = now; showTime(); }
+    if (now - t1s >= 1000 && !configMode) { t1s = now; showTime(); }
 }
 
 // ---------- audioI2S 回调 ----------

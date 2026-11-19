@@ -76,8 +76,9 @@ int curIndex = 0;
 // ---------- 设置 / 状态 ----------
 Preferences prefs;
 WiFiPortal portal("ATK-BOX-Setup");
-int screenRotation = ATK_DEFAULT_ROTATION;
-bool configMode = false;           // 方向设置模式
+int screenRotation = ATK_DEFAULT_ROTATION;  // 保留: 沿用已保存的横屏设置, 不再提供调整入口
+int curTheme = 0;                  // 0=仪表盘主题, 1=FM刻度盘主题
+bool configMode = false;           // 主题选择模式 (长按BOOT进入)
 
 // 屏幕常亮: 背光在 atk_io.begin() 时已打开, 之后不再关闭。
 // (自动熄屏功能已移除: 之前的熄屏/唤醒状态机在部分板子上出现按键 toggle 黑屏的怪象)
@@ -113,16 +114,18 @@ void showSplash(const char *line1, const char *line2 = nullptr,
     if (line3) tft.drawCentreString(line3, CX, CY + 30, FONT16);
 }
 
-// 方向设置模式界面: 大字显示当前旋转值
-void showRotationScreen() {
+// 主题选择模式界面: 显示当前主题
+void showThemeScreen() {
     tft.fillScreen(TFT_BLACK);
     tft.setTextColor(TFT_WHITE, TFT_BLACK);
-    tft.drawCentreString("屏幕方向设置", CX, 20, FONT16);
+    tft.drawCentreString("界面主题设置", CX, 20, FONT16);
+    tft.setTextColor(TFT_CYAN, TFT_BLACK);
+    tft.drawCentreString(curTheme == 0 ? "主题 1: 圆环仪表盘" : "主题 2: FM刻度盘", CX, CY - 24, FONT16);
     tft.setTextColor(TFT_YELLOW, TFT_BLACK);
-    sprintf(buf, "方向 %d / 7", screenRotation);
-    tft.drawCentreString(buf, CX, CY - 20, FONT16);
+    sprintf(buf, "当前 %d / 2", curTheme + 1);
+    tft.drawCentreString(buf, CX, CY + 4, FONT16);
     tft.setTextColor(TFT_WHITE, TFT_BLACK);
-    tft.drawCentreString("短按:切换  长按3秒:保存", CX, SH - 40, FONT16);
+    tft.drawCentreString("短按:切换主题  长按2秒:保存", CX, SH - 40, FONT16);
 }
 
 // ============================================================
@@ -171,21 +174,16 @@ void setScreenTimeout(int sec) {
 
 // ============================================================
 // 按键
-//   BOOT(K0): 短按 播放/暂停; 长按3秒 进入/保存方向设置
-//   方向模式内: 短按 切换方向; 长按3秒 保存并重启
+//   BOOT(K0): 短按 播放/暂停; 长按2秒 进入/保存主题选择
+//   主题模式内: 短按 切换主题; 长按2秒 保存并重启
 //   K1 短按下一台 / 长按音量+; K2 短按上一台 / 长按音量- (低电平按下)
 // ============================================================
 void setupBootButton() {
     pinMode(0, INPUT_PULLUP);
 }
 
-void applyRotation() {
-    tft.setRotation(screenRotation);
-    tft.fillScreen(TFT_BLACK);
-}
-
 void pollXL9555Keys() {
-    if (configMode) return;                 // 方向模式下忽略 K1/K2
+    if (configMode) return;                 // 主题选择模式下忽略 K1/K2
     static bool k1Last = true, k2Last = true;
     static unsigned long k1Press = 0, k2Press = 0;
     static bool k1Long = false, k2Long = false;
@@ -237,17 +235,16 @@ void pollBootButton() {
     // 按住期间持续检测长按 (不依赖松开沿)
     if (!cur && pressStart && !longFired && (now - pressStart) >= 2000) {
         longFired = true;
-        wakeScreen();
         if (!configMode) {
-            configMode = true;
-            showRotationScreen();
-            Serial.printf("[ BTN] long press -> config mode ON, rotation=%d\n", screenRotation);
+            configMode = true;               // 进入主题选择模式
+            showThemeScreen();
+            Serial.printf("[ BTN] long press -> theme mode ON, theme=%d\n", curTheme);
         } else {
-            // 方向模式下长按: 保存并重启
+            // 主题模式下长按: 保存主题并重启
             prefs.begin("netradio", false);
-            prefs.putInt("rotation", screenRotation);
+            prefs.putInt("theme", curTheme);
             prefs.end();
-            showSplash("方向已保存", "正在重启...");
+            showSplash("主题已保存", "正在重启...");
             delay(800);
             ESP.restart();
         }
@@ -257,18 +254,16 @@ void pollBootButton() {
         if (!cur) {                          // 按下沿
             pressStart = now;
             longFired = false;
-            wakeScreen();
         } else {                             // 松开沿
             unsigned long held = now - pressStart;
             if (!longFired && held < 2000) {
                 // 短按
                 if (configMode) {
-                    screenRotation = (screenRotation + 1) % 8;
-                    applyRotation();
-                    showRotationScreen();
-                    Serial.printf("[ BTN] short press -> rotation=%d\n", screenRotation);
+                    curTheme = (curTheme + 1) % 2;
+                    ui.setTheme(curTheme);   // 主题模式下短按可预览切换
+                    showThemeScreen();
+                    Serial.printf("[ BTN] short press -> theme=%d\n", curTheme);
                 } else {
-                    wakeScreen();                       // 刷新活动时间, 保证亮够设定时长
                     audio.pauseResume();
                     ui.setPlaying(audio.isRunning());
                 }
@@ -288,9 +283,11 @@ void initHardware() {
 
     // 读取保存的屏幕方向
     prefs.begin("netradio", true);
-    screenRotation = prefs.getInt("rotation", ATK_DEFAULT_ROTATION);
+    screenRotation = prefs.getInt("rotation", ATK_DEFAULT_ROTATION);  // 沿用已保存的横屏
+    curTheme       = prefs.getInt("theme", 0);                        // 读取保存的界面主题
     prefs.end();
     if (screenRotation < 0 || screenRotation > 7) screenRotation = ATK_DEFAULT_ROTATION;
+    if (curTheme < 0 || curTheme > 1) curTheme = 0;
 
     tft.init();
     tft.setRotation(screenRotation);
@@ -322,8 +319,8 @@ void initHardware() {
     admin.onTimeout = setScreenTimeout;
     admin.onWake    = wakeScreen;
 
-    // 初始化仪表盘 UI (此时电台列表已完整)
-    ui.begin(SW, SH);
+    // 初始化 UI (此时电台列表已完整), 应用保存的主题
+    ui.begin(SW, SH, curTheme);
     ui.setStation(0, radios.size(), radios.size() ? radios[0].name : "网络电台", true);
     ui.setVolume(curVolume, 21, true);
     ui.setPlaying(false);
